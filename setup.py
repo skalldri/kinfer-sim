@@ -36,6 +36,7 @@ setup(
     install_requires=requirements,
     extras_require={"dev": requirements_dev},
     packages=find_packages(),
+    scripts=["scripts/kinfer-sim"],
     # entry_points={
     #     "console_scripts": [
     #         "cli=kinfer_sim.cli:main",
