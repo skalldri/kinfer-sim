@@ -31,11 +31,11 @@ class ServerConfig(tap.TypedArgs):
 
     # Physics settings
     dt: float = tap.arg(default=0.0001, help="Simulation timestep")
-    gravity: bool = tap.arg(default=True, help="Enable gravity")
+    no_gravity: bool = tap.arg(default=False, help="Enable gravity")
     start_height: float = tap.arg(default=1.5, help="Start height")
 
     # Rendering settings
-    render: bool = tap.arg(default=True, help="Enable rendering")
+    no_render: bool = tap.arg(default=False, help="Enable rendering")
     render_frequency: float = tap.arg(default=1.0, help="Render frequency (Hz)")
     frame_width: int = tap.arg(default=640, help="Frame width")
     frame_height: int = tap.arg(default=480, help="Frame height")
@@ -60,8 +60,8 @@ class SimulationServer:
             model_path=model_path,
             model_metadata=model_metadata,
             dt=config.dt,
-            gravity=config.gravity,
-            render_mode="window" if config.render else "offscreen",
+            gravity=not config.no_gravity,
+            render_mode="offscreen" if config.no_render else "window",
             start_height=config.start_height,
             command_delay_min=config.command_delay_min,
             command_delay_max=config.command_delay_max,
