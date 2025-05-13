@@ -92,6 +92,7 @@ class MujocoSimulator:
         start_height: float = 1.5,
         command_delay_min: float | None = None,
         command_delay_max: float | None = None,
+        drop_rate: float = 0.0,
         joint_pos_delta_noise: float = 0.0,
         joint_pos_noise: float = 0.0,
         joint_vel_noise: float = 0.0,
@@ -119,6 +120,7 @@ class MujocoSimulator:
         self._start_height = start_height
         self._command_delay_min = command_delay_min
         self._command_delay_max = command_delay_max
+        self._drop_rate = drop_rate
         self._joint_pos_delta_noise = math.radians(joint_pos_delta_noise)
         self._joint_pos_noise = math.radians(joint_pos_noise)
         self._joint_vel_noise = math.radians(joint_vel_noise)
@@ -246,15 +248,14 @@ class MujocoSimulator:
 
         # Sets the ctrl values from the current commands.
         for name, target_command in self._current_commands.items():
+            joint = self._data.joint(name)
             joint_id = self._joint_name_to_id[name]
             actuator_id = self._joint_id_to_actuator_id[joint_id]
             kp = self._joint_name_to_kp[name]
             kd = self._joint_name_to_kd[name]
-            current_position = self._data.joint(name).qpos
-            current_velocity = self._data.joint(name).qvel
             target_torque = (
-                kp * (target_command.get("position", 0.0) - current_position)
-                + kd * (target_command.get("velocity", 0.0) - current_velocity)
+                kp * (target_command.get("position", 0.0) - joint.qpos)
+                + kd * (target_command.get("velocity", 0.0) - joint.qvel)
                 + target_command.get("torque", 0.0)
             )
             if (max_torque := self._joint_name_to_max_torque.get(name)) is not None:
@@ -306,6 +307,10 @@ class MujocoSimulator:
             # Calculate random delay and application time
             delay = np.random.uniform(self._command_delay_min, self._command_delay_max)
             application_time = self._sim_time + delay
+
+            # Randomly drop some actions.
+            if random.random() < self._drop_rate:
+                continue
 
             self._next_commands[joint_name] = (command, application_time)
 
