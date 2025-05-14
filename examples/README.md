@@ -5,7 +5,7 @@
 To run the K-Bot standing policy, use the following command:
 
 ```bash
-kinfer-sim examples/kbot_standing.kinfer kbot
+kinfer-sim examples/kbot_standing.kinfer kbot --start-height 1.1
 ```
 
 ## Z-Bot
