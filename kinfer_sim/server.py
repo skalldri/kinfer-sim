@@ -10,12 +10,13 @@ from pathlib import Path
 import colorlogging
 import numpy as np
 import typed_argparse as tap
+from askin import KeyboardController
 from kinfer.rust_bindings import PyModelRunner
 from kscale import K
 from kscale.web.gen.api import RobotURDFMetadataOutput
 from kscale.web.utils import get_robots_dir, should_refresh_file
 
-from kinfer_sim.provider import ModelProvider
+from kinfer_sim.provider import KeyboardInputState, ModelProvider
 from kinfer_sim.simulator import MujocoSimulator
 from kinfer_sim.viewer import save_logs, save_video
 
@@ -34,7 +35,7 @@ class ServerConfig(tap.TypedArgs):
     # Physics settings
     dt: float = tap.arg(default=0.0001, help="Simulation timestep")
     no_gravity: bool = tap.arg(default=False, help="Enable gravity")
-    start_height: float = tap.arg(default=0.0, help="Start height")
+    start_height: float = tap.arg(default=1.1, help="Start height")
     quat_name: str = tap.arg(default="imu_site_quat", help="Name of the quaternion sensor")
     acc_name: str = tap.arg(default="imu_acc", help="Name of the accelerometer sensor")
     gyro_name: str = tap.arg(default="imu_gyro", help="Name of the gyroscope sensor")
@@ -48,6 +49,9 @@ class ServerConfig(tap.TypedArgs):
     save_path: str = tap.arg(default="logs", help="Path to save logs")
     save_video: bool = tap.arg(default=False, help="Save video")
     save_logs: bool = tap.arg(default=False, help="Save logs")
+
+    # Model settings
+    use_keyboard: bool = tap.arg(default=False, help="Use keyboard to control the robot")
 
     # Randomization settings
     command_delay_min: float | None = tap.arg(default=None, help="Minimum command delay")
@@ -64,6 +68,7 @@ class SimulationServer:
         model_path: str | Path,
         model_metadata: RobotURDFMetadataOutput,
         config: ServerConfig,
+        keyboard_state: KeyboardInputState,
     ) -> None:
         self.simulator = MujocoSimulator(
             model_path=model_path,
@@ -93,6 +98,7 @@ class SimulationServer:
         self._save_path = Path(config.save_path).expanduser().resolve()
         self._save_video = config.save_video
         self._save_logs = config.save_logs
+        self._keyboard_state = keyboard_state
 
     async def _simulation_loop(self) -> None:
         """Run the simulation loop asynchronously."""
@@ -108,8 +114,12 @@ class SimulationServer:
             quat_name=self._quat_name,
             acc_name=self._acc_name,
             gyro_name=self._gyro_name,
+            keyboard_state=self._keyboard_state,
         )
         model_runner = PyModelRunner(str(self._kinfer_path), model_provider)
+
+        loop = asyncio.get_running_loop()
+
         carry = model_runner.init()
 
         frames: list[np.ndarray] | None = None
@@ -129,9 +139,9 @@ class SimulationServer:
                     for _ in range(self.simulator._sim_decimation):
                         await self.simulator.step()
 
-                # Runs the model runner for one step.
-                output, carry = model_runner.step(carry)
-                model_runner.take_action(output)
+                # Offload blocking calls to the executor
+                output, carry = await loop.run_in_executor(None, model_runner.step, carry)
+                await loop.run_in_executor(None, model_runner.take_action, output)
 
                 if num_steps % self._render_decimation == 0:
                     self.simulator.render()
@@ -227,11 +237,26 @@ async def serve(config: ServerConfig) -> None:
         )
     )
 
+    key_state = KeyboardInputState()
+
+    if config.use_keyboard:
+
+        async def key_handler(key: str) -> None:
+            await key_state.update(key)
+
+        async def default() -> None:
+            key_state.value = [1, 0, 0, 0, 0, 0, 0]
+
+        keyboard_controller = KeyboardController(key_handler, default=default)
+        await keyboard_controller.start()
+
     server = SimulationServer(
         model_path=model_path,
         model_metadata=model_metadata,
         config=config,
+        keyboard_state=key_state,
     )
+
     await server.start()
 
 

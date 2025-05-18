@@ -1,11 +1,14 @@
 """Defines a K-Infer model provider for the Mujoco simulator."""
 
+import logging
 from typing import Sequence, cast
 
 import numpy as np
 from kinfer.rust_bindings import ModelProviderABC
 
 from kinfer_sim.simulator import MujocoSimulator
+
+logger = logging.getLogger(__name__)
 
 
 def rotate_vector_by_quat(vector: np.ndarray, quat: np.ndarray, inverse: bool = False, eps: float = 1e-6) -> np.ndarray:
@@ -69,16 +72,41 @@ def rotate_vector_by_quat(vector: np.ndarray, quat: np.ndarray, inverse: bool = 
     return np.concatenate([xx, yy, zz], axis=-1)
 
 
+class KeyboardInputState:
+    """State to hold and modify commands based on keyboard input."""
+
+    value: list[float]
+
+    def __init__(self) -> None:
+        self.value = [1, 0, 0, 0, 0, 0, 0]
+
+    async def update(self, key: str) -> None:
+        if key == "w":
+            self.value = [0, 1, 0, 0, 0, 0, 0]
+        elif key == "s":
+            self.value = [0, 0, 1, 0, 0, 0, 0]
+        elif key == "a":
+            self.value = [0, 0, 0, 0, 0, 1, 0]
+        elif key == "d":
+            self.value = [0, 0, 0, 0, 0, 0, 1]
+        elif key == "q":
+            self.value = [0, 0, 0, 1, 0, 0, 0]
+        elif key == "e":
+            self.value = [0, 0, 0, 0, 1, 0, 0]
+
+
 class ModelProvider(ModelProviderABC):
     simulator: MujocoSimulator
     quat_name: str
     acc_name: str
     gyro_name: str
     arrays: dict[str, np.ndarray]
+    keyboard_state: KeyboardInputState
 
     def __new__(
         cls,
         simulator: MujocoSimulator,
+        keyboard_state: KeyboardInputState,
         quat_name: str = "imu_site_quat",
         acc_name: str = "imu_acc",
         gyro_name: str = "imu_gyro",
@@ -89,6 +117,7 @@ class ModelProvider(ModelProviderABC):
         self.acc_name = acc_name
         self.gyro_name = gyro_name
         self.arrays = {}
+        self.keyboard_state = keyboard_state
         return self
 
     def get_joint_angles(self, joint_names: Sequence[str]) -> np.ndarray:
@@ -123,8 +152,16 @@ class ModelProvider(ModelProviderABC):
         self.arrays["gyroscope"] = gyro_array
         return gyro_array
 
+    def get_time(self) -> np.ndarray:
+        time = self.simulator._data.time
+        time_array = np.array([time], dtype=np.float32)
+        self.arrays["time"] = time_array
+        return time_array
+
     def get_command(self) -> np.ndarray:
-        raise NotImplementedError("get_command")
+        command_array = np.array(self.keyboard_state.value, dtype=np.float32)
+        self.arrays["command"] = command_array
+        return command_array
 
     def take_action(self, joint_names: Sequence[str], action: np.ndarray) -> None:
         assert action.shape == (len(joint_names),)
