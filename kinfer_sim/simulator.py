@@ -97,6 +97,10 @@ class MujocoSimulator:
         joint_pos_delta_noise: float = 0.0,
         joint_pos_noise: float = 0.0,
         joint_vel_noise: float = 0.0,
+        joint_zero_noise: float = 0.0,
+        accelerometer_noise: float = 0.0,
+        gyroscope_noise: float = 0.0,
+        projected_gravity_noise: float = 0.0,
         pd_update_frequency: float = 100.0,
         mujoco_scene: str = "smooth",
         integrator: str = "implicitfast",
@@ -125,6 +129,10 @@ class MujocoSimulator:
         self._joint_pos_delta_noise = math.radians(joint_pos_delta_noise)
         self._joint_pos_noise = math.radians(joint_pos_noise)
         self._joint_vel_noise = math.radians(joint_vel_noise)
+        self._joint_zero_noise = math.radians(joint_zero_noise)
+        self._accelerometer_noise = accelerometer_noise
+        self._gyroscope_noise = math.radians(gyroscope_noise)
+        self._projected_gravity_noise = projected_gravity_noise
         self._update_pd_delta = 1.0 / pd_update_frequency
         self._camera = camera
 
@@ -172,6 +180,8 @@ class MujocoSimulator:
         self._model.opt.timestep = self._dt
         self._model.opt.integrator = get_integrator(integrator)
         self._model.opt.solver = get_solver(solver)
+
+        self._model.qpos0[:] = np.random.normal(0, self._joint_zero_noise) + self._model.qpos0
 
         self._data = mujoco.MjData(self._model)
 
