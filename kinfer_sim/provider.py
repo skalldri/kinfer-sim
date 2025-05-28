@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Sequence, cast
 
 import numpy as np
-from kinfer.rust_bindings import ModelProviderABC
+from kinfer.rust_bindings import ModelProviderABC, PyModelMetadata
 
 from kinfer_sim.simulator import MujocoSimulator
 
@@ -156,6 +156,38 @@ class ModelProvider(ModelProviderABC):
         self.keyboard_state = keyboard_state
         return self
 
+    def get_inputs(self, input_types: Sequence[str], metadata: PyModelMetadata) -> dict[str, np.ndarray]:
+        """Get inputs for the model based on the requested input types.
+
+        Args:
+            input_types: List of input type names to retrieve
+            metadata: Model metadata containing joint names and other info
+
+        Returns:
+            Dictionary mapping input type names to numpy arrays
+        """
+        inputs = {}
+
+        for input_type in input_types:
+            if input_type == "joint_angles":
+                inputs[input_type] = self.get_joint_angles(metadata.joint_names)  # type: ignore[attr-defined]
+            elif input_type == "joint_angular_velocities":
+                inputs[input_type] = self.get_joint_angular_velocities(metadata.joint_names)  # type: ignore[attr-defined]
+            elif input_type == "projected_gravity":
+                inputs[input_type] = self.get_projected_gravity()
+            elif input_type == "accelerometer":
+                inputs[input_type] = self.get_accelerometer()
+            elif input_type == "gyroscope":
+                inputs[input_type] = self.get_gyroscope()
+            elif input_type == "command":
+                inputs[input_type] = self.get_command()
+            elif input_type == "time":
+                inputs[input_type] = self.get_time()
+            else:
+                raise ValueError(f"Unknown input type: {input_type}")
+
+        return inputs
+
     def get_joint_angles(self, joint_names: Sequence[str]) -> np.ndarray:
         angles = [float(self.simulator._data.joint(joint_name).qpos) for joint_name in joint_names]
         angles_array = np.array(angles, dtype=np.float32)
@@ -214,7 +246,8 @@ class ModelProvider(ModelProviderABC):
         self.arrays["command"] = command_array
         return command_array
 
-    def take_action(self, joint_names: Sequence[str], action: np.ndarray) -> None:
+    def take_action(self, action: np.ndarray, metadata: PyModelMetadata) -> None:
+        joint_names = metadata.joint_names  # type: ignore[attr-defined]
         assert action.shape == (len(joint_names),)
         self.arrays["action"] = action
         self.simulator.command_actuators({name: {"position": action[i]} for i, name in enumerate(joint_names)})
