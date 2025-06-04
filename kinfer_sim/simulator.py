@@ -10,11 +10,12 @@ from typing import Literal, NotRequired, TypedDict, TypeVar
 
 import mujoco
 import numpy as np
+from kmv.app.viewer import DefaultMujocoViewer, QtViewer
+from kmv.core.types import RenderMode
 from kscale.web.gen.api import RobotURDFMetadataOutput
 from mujoco_scenes.mjcf import load_mjmodel
 
 from kinfer_sim.actuators import Actuator, ActuatorCommandDict, create_actuator
-from kinfer_sim.viewer import get_viewer
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,74 @@ def get_solver(solver: str) -> mujoco.mjtSolver:
             return mujoco.mjtSolver.mjSOL_NEWTON
         case _:
             raise ValueError(f"Invalid solver: {solver}")
+
+
+def get_viewer(
+    mj_model: mujoco.MjModel,
+    render_with_glfw: bool,
+    render_width: int = 640,
+    render_height: int = 480,
+    render_distance: float = 3.5,
+    render_azimuth: float = 90.0,
+    render_elevation: float = -10.0,
+    render_lookat: tuple[float, float, float] = (0.0, 0.0, 0.5),
+    render_track_body_id: int | None = None,
+    render_camera_name: str | None = None,
+    render_shadow: bool = False,
+    render_reflection: bool = False,
+    render_contact_force: bool = False,
+    render_contact_point: bool = False,
+    render_inertia: bool = False,
+    mj_data: mujoco.MjData | None = None,
+    save_path: str | Path | None = None,
+    mode: RenderMode | None = None,
+) -> QtViewer | DefaultMujocoViewer:
+    if mode is None:
+        mode = "window" if save_path is None else "offscreen"
+
+    if (render_with_glfw := render_with_glfw) is None:
+        render_with_glfw = mode == "window"
+
+    viewer: QtViewer | DefaultMujocoViewer
+
+    if render_with_glfw:
+        viewer = QtViewer(
+            mj_model,
+            width=render_width,
+            height=render_height,
+            shadow=render_shadow,
+            reflection=render_reflection,
+            contact_force=render_contact_force,
+            contact_point=render_contact_point,
+            inertia=render_inertia,
+            enable_plots=True,
+            camera_distance=render_distance,
+            camera_azimuth=render_azimuth,
+            camera_elevation=render_elevation,
+            camera_lookat=render_lookat,
+            track_body_id=render_track_body_id,
+        )
+
+    else:
+        viewer = DefaultMujocoViewer(
+            mj_model,
+            width=render_width,
+            height=render_height,
+        )
+
+        # Sets the viewer camera.
+        viewer.cam.distance = render_distance
+        viewer.cam.azimuth = render_azimuth
+        viewer.cam.elevation = render_elevation
+        viewer.cam.lookat[:] = render_lookat
+        if render_track_body_id is not None:
+            viewer.cam.trackbodyid = render_track_body_id
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+
+        if render_camera_name is not None:
+            viewer.set_camera(render_camera_name)
+
+    return viewer
 
 
 class MujocoSimulator:
@@ -285,13 +354,26 @@ class MujocoSimulator:
         mujoco.mj_forward(self._model, self._data)
         mujoco.mj_step(self._model, self._data)
 
+        if isinstance(self._viewer, QtViewer):
+            # Push physics state to the viewer.
+            self._viewer.push_state(
+                self._data.qpos,
+                self._data.qvel,
+                sim_time=float(self._data.time),
+            )
+
+            # Apply forces from the viewer.
+            xfrc = self._viewer.drain_control_pipe()
+            if xfrc is not None:
+                self._data.xfrc_applied[:] = xfrc
+
         return self._data
 
-    def render(self) -> None:
-        self._viewer.render()
-
     def read_pixels(self) -> np.ndarray:
-        return self._viewer.read_pixels()
+        if isinstance(self._viewer, DefaultMujocoViewer):
+            return self._viewer.read_pixels()
+        else:
+            raise RuntimeError("read_pixels() is only available with the DefaultMujocoViewer!")
 
     async def get_sensor_data(self, name: str) -> np.ndarray:
         """Get data from a named sensor."""
