@@ -22,6 +22,7 @@ from kscale.web.utils import get_robots_dir, should_refresh_file
 
 from kinfer_sim.provider import (
     ControlVectorInputState,
+    ExpandedControlVectorInputState,
     InputState,
     JoystickInputState,
     ModelProvider,
@@ -62,8 +63,8 @@ class ServerConfig(tap.TypedArgs):
 
     # Model settings
     use_keyboard: bool = tap.arg(default=False, help="Use keyboard to control the robot")
-    command_type: Literal["joystick", "simple_joystick", "control_vector"] = tap.arg(
-        default="joystick", help="Type of command to use"
+    command_type: Literal["joystick", "simple_joystick", "control_vector", "expanded_control_vector"] = tap.arg(
+        default="expanded_control_vector", help="Type of command to use"
     )
 
     # Randomization settings
@@ -286,15 +287,16 @@ async def serve(config: ServerConfig) -> None:
 
     key_state: InputState
 
-    match config.command_type:
-        case "joystick":
-            key_state = JoystickInputState()
-        case "simple_joystick":
-            key_state = SimpleJoystickInputState()
-        case "control_vector":
-            key_state = ControlVectorInputState()
-        case _:
-            raise ValueError(f"Invalid command type: {config.command_type}")
+    if config.command_type == "joystick":
+        key_state = JoystickInputState()
+    elif config.command_type == "simple_joystick":
+        key_state = SimpleJoystickInputState()
+    elif config.command_type == "control_vector":
+        key_state = ControlVectorInputState()
+    elif config.command_type == "expanded_control_vector":
+        key_state = ExpandedControlVectorInputState()
+    else:
+        raise ValueError(f"Invalid command type: {config.command_type}")
 
     if config.use_keyboard:
 
@@ -317,6 +319,9 @@ async def serve(config: ServerConfig) -> None:
                 keyboard_controller = KeyboardController(key_handler, default=default)
 
             case "control_vector":
+                keyboard_controller = KeyboardController(key_handler)
+
+            case "expanded_control_vector":
                 keyboard_controller = KeyboardController(key_handler)
 
             case _:
