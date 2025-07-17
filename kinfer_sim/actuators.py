@@ -47,6 +47,7 @@ class Actuator(ABC):
     @abstractmethod
     def from_metadata(
         cls,
+        joint_name: str,
         joint_meta: JointMetadataOutput,
         actuator_meta: ActuatorMetadataOutput | None,
         *,
@@ -81,12 +82,16 @@ class PositionActuator(Actuator):
     def __init__(
         self,
         *,
+        joint_name: str,
+        joint_id: int,
         kp: float,
         kd: float,
         max_torque: float | None = None,
         joint_min: float,
         joint_max: float,
     ) -> None:
+        self.joint_name = joint_name
+        self.joint_id = joint_id
         self.kp = kp
         self.kd = kd
         self.max_torque = max_torque
@@ -96,16 +101,21 @@ class PositionActuator(Actuator):
     @classmethod
     def from_metadata(
         cls,
+        joint_name: str,
         joint_meta: JointMetadataOutput,
         actuator_meta: ActuatorMetadataOutput | None,
         *,
         dt: float,
     ) -> "PositionActuator":
+        if joint_meta.id is None:
+            raise ValueError(f"Joint {joint_name}: ID is not specified in metadata")
         max_torque = None
         if actuator_meta and actuator_meta.max_torque is not None:
             max_torque = float(actuator_meta.max_torque)
         joint_min, joint_max = get_joint_limits_from_metadata(joint_meta)
         return cls(
+            joint_name=joint_name,
+            joint_id=joint_meta.id,
             kp=_as_float(joint_meta.kp),
             kd=_as_float(joint_meta.kd),
             max_torque=max_torque,
@@ -113,7 +123,7 @@ class PositionActuator(Actuator):
             joint_max=joint_max,
         )
 
-    def clamp_position_target(self, target_position: float) -> float:
+    def get_clamped_position_target(self, target_position: float) -> float:
         """Clamp target position to be within joint limits."""
         return float(np.clip(target_position, self.joint_min, self.joint_max))
 
@@ -127,20 +137,22 @@ class PositionActuator(Actuator):
     ) -> float:
         # Clamp target position to joint limits
         target_position = cmd.get("position", 0.0)
-        clamped_position = self.clamp_position_target(target_position)
+        # Clamped position is only used for warning if action is out of joint limits
+        clamped_position = self.get_clamped_position_target(target_position)
 
         # Log warning if position was clamped
         if target_position != clamped_position:
             logger.warning(
-                "Clamped position from %.3f to %.3f (limits: [%.3f, %.3f])",
+                "%s (id %d) action %s was out of joint limits: [%.3f, %.3f]",
+                self.joint_name,
+                self.joint_id,
                 target_position,
-                clamped_position,
                 self.joint_min,
                 self.joint_max,
             )
 
         torque = (
-            self.kp * (clamped_position - qpos) + self.kd * (cmd.get("velocity", 0.0) - qvel) + cmd.get("torque", 0.0)
+            self.kp * (target_position - qpos) + self.kd * (cmd.get("velocity", 0.0) - qvel) + cmd.get("torque", 0.0)
         )
         if self.max_torque is not None:
             torque = float(np.clip(torque, -self.max_torque, self.max_torque))
@@ -231,6 +243,8 @@ class FeetechActuator(Actuator):
     def __init__(
         self,
         *,
+        joint_name: str,
+        joint_id: int,
         kp: float,
         kd: float,
         max_torque: float,
@@ -245,6 +259,8 @@ class FeetechActuator(Actuator):
         positive_deadband: float,
         negative_deadband: float,
     ) -> None:
+        self.joint_name = joint_name
+        self.joint_id = joint_id
         self.kp = kp
         self.kd = kd
         self.max_torque = max_torque
@@ -263,14 +279,19 @@ class FeetechActuator(Actuator):
     @classmethod
     def from_metadata(
         cls,
+        joint_name: str,
         joint_meta: JointMetadataOutput,
         actuator_meta: ActuatorMetadataOutput | None,
         *,
         dt: float,
     ) -> "FeetechActuator":
+        if joint_meta.id is None:
+            raise ValueError(f"Joint {joint_name}: ID is not specified in metadata")
         if actuator_meta is None:
             raise ValueError("Feetech actuator metadata missing")
         return cls(
+            joint_name=joint_name,
+            joint_id=joint_meta.id,
             kp=_as_float(joint_meta.kp),
             kd=_as_float(joint_meta.kd),
             max_torque=_as_float(actuator_meta.max_torque),
@@ -335,6 +356,7 @@ def get_joint_limits_from_metadata(joint_meta: JointMetadataOutput) -> tuple[flo
 
 
 def create_actuator(
+    joint_name: str,
     joint_meta: JointMetadataOutput,
     actuator_meta: ActuatorMetadataOutput | None,
     *,
@@ -344,7 +366,7 @@ def create_actuator(
     act_type = (joint_meta.actuator_type or "").lower()
     for prefix, cls in _actuator_registry.items():
         if act_type.startswith(prefix):
-            return cls.from_metadata(joint_meta, actuator_meta, dt=dt)
+            return cls.from_metadata(joint_name, joint_meta, actuator_meta, dt=dt)
 
     logger.warning("Unknown actuator type '%s', defaulting to PD", act_type)
-    return PositionActuator.from_metadata(joint_meta, actuator_meta, dt=dt)
+    return PositionActuator.from_metadata(joint_name, joint_meta, actuator_meta, dt=dt)
