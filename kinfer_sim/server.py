@@ -128,6 +128,8 @@ class SimulationServer:
         self._save_video = config.save_video
         self._save_logs = config.save_logs
         self._keyboard_state = keyboard_state
+        self._joint_names: list[str] = self._load_joint_names()
+        self._plots_w_joint_names: frozenset[str] = frozenset({"joint_angles", "joint_velocities", "action"})
 
         self._video_writer: VideoWriter | None = None
         if self._save_video:
@@ -159,6 +161,45 @@ class SimulationServer:
 
         except (tarfile.TarError, FileNotFoundError):
             logger.warning("Could not validate command dimension: unable to read kinfer file: %s", self._kinfer_path)
+
+    def _load_joint_names(self) -> list[str]:
+        """Return joint names listed in the .kinfer metadata, or raise."""
+        # Load metadata from the kinfer archive.
+        try:
+            with tarfile.open(self._kinfer_path, "r:gz") as tar:
+                metadata_file = tar.extractfile("metadata.json")
+                if metadata_file is None:
+                    raise FileNotFoundError("'metadata.json' not found inside archive")
+
+                metadata = metadata_from_json(metadata_file.read().decode("utf-8"))
+        except (tarfile.TarError, FileNotFoundError) as exc:
+            raise ValueError(f"Could not load metadata from {self._kinfer_path}: {exc}") from exc
+
+        # Extract joint names from the metadata.
+        joint_names = getattr(metadata, "joint_names", None)
+        if not joint_names:
+            raise ValueError(f"'joint_names' missing in metadata for {self._kinfer_path}")
+
+        logger.info("Loaded %d joint names from model metadata", len(joint_names))
+        return list(joint_names)
+
+    def _to_scalars(self, name: str, arr: np.ndarray) -> dict[str, float]:
+        """Convert a 1-D array into `{legend_name: value}` pairs.
+
+        This is useful for including the joint names in the legend.
+        """
+        flat = arr.flatten()
+        use_joint_names = name in self._plots_w_joint_names and len(flat) == len(self._joint_names)
+
+        # Plot with indices if joint names are not needed
+        if not use_joint_names:
+            return {f"{name}_{idx}": float(v) for idx, v in enumerate(flat)}
+
+        # Plot with joint names
+        return {
+            f"{name}_{idx} - {joint_name}": float(val)
+            for idx, (joint_name, val) in enumerate(zip(self._joint_names, flat))
+        }
 
     async def _simulation_loop(self) -> None:
         """Run the simulation loop asynchronously."""
@@ -207,15 +248,8 @@ class SimulationServer:
 
                 # Plot policy inputs and outputs to the viewer
                 if isinstance(self.simulator._viewer, QtViewer):
-                    for input_name, input_array in model_provider.arrays.items():
-                        input_scalars = {
-                            f"{input_name}_{idx}": float(val) for idx, val in enumerate(input_array.flatten())
-                        }
-
-                        self.simulator._viewer.push_plot_metrics(
-                            scalars=input_scalars,
-                            group=f"{input_name}",
-                        )
+                    for n, a in model_provider.arrays.items():
+                        self.simulator._viewer.push_plot_metrics(scalars=self._to_scalars(n, a), group=n)
 
                 num_steps += 1
                 if logs is not None:
