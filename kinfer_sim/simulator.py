@@ -209,6 +209,7 @@ class MujocoSimulator:
         # Gets the sim decimation.
         if (control_frequency := self._metadata.control_frequency) is None:
             raise ValueError("Control frequency is not set")
+
         self._control_frequency = float(control_frequency)
         self._control_dt = 1.0 / self._control_frequency
         self._sim_decimation = int(self._control_dt / self._dt)
@@ -263,7 +264,7 @@ class MujocoSimulator:
         # Initialize velocities and accelerations to zero
         if self._freejoint:
             self._data.qpos[:3] = np.array([0.0, 0.0, self._start_height])
-            self._data.qpos[3:7] = np.array([0.0, 0.0, 0.0, 1.0])
+            self._data.qpos[3:7] = np.array([1.0, 0.0, 0.0, 0.0])
             self._data.qpos[7:] = np.zeros_like(self._data.qpos[7:])
         else:
             self._data.qpos[:] = np.zeros_like(self._data.qpos)
@@ -313,7 +314,7 @@ class MujocoSimulator:
         }
         self._next_commands: dict[str, tuple[ActuatorCommand, float]] = {}
 
-    async def step(self) -> None:
+    def step(self) -> None:
         """Execute one step of the simulation."""
         self._sim_time += self._dt
         self._step += 1
@@ -351,7 +352,7 @@ class MujocoSimulator:
             logger.debug("Setting ctrl for actuator %s to %f", actuator_id, torque)
             self._data.ctrl[actuator_id] = torque
 
-        mujoco.mj_forward(self._model, self._data)
+        # mujoco.mj_forward(self._model, self._data)
         mujoco.mj_step(self._model, self._data)
 
         if isinstance(self._viewer, QtViewer):
@@ -362,12 +363,32 @@ class MujocoSimulator:
                 sim_time=float(self._data.time),
             )
 
+            # Send physics properties (just first 3 values of qpos for now)
+            qpos_arr = np.asarray(self._data.qpos)
+            physics_scalars = {f"qpos{i}": float(qpos_arr[i]) for i in range(min(3, qpos_arr.size))}
+            self._viewer.push_plot_metrics(physics_scalars, group="physics")
+
+            # Push command to the viewer as a plot
+
             # Apply forces from the viewer.
             xfrc = self._viewer.drain_control_pipe()
             if xfrc is not None:
                 self._data.xfrc_applied[:] = xfrc
 
         return self._data
+
+    def push_sensor_data(self) -> None:
+        """Push sensor data to the viewer.
+        This is broken into a separate method so that we do not unnecessarily push sensor data to the viewer (which is expensive)
+        during each simulation step. Instead, it can be called right before the model is executed.
+        """
+        # Push each sensor to the viewer
+        for sensor_name, sensor_id in self._sensor_name_to_id.items():
+            sensor = self._data.sensor(sensor_id)
+            sensor_data = sensor.data
+            flat_sensor_data = sensor_data.reshape(-1)
+            sensor_scalars = {f"{i}": float(value) for i, value in enumerate(flat_sensor_data)}
+            self._viewer.push_plot_metrics(sensor_scalars, group=f"Sensor/{sensor_name}")
 
     def read_pixels(self) -> np.ndarray:
         if isinstance(self._viewer, DefaultMujocoViewer):

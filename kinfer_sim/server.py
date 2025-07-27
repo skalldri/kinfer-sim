@@ -20,6 +20,8 @@ from kscale import K
 from kscale.web.gen.api import RobotURDFMetadataOutput
 from kscale.web.utils import get_robots_dir, should_refresh_file
 
+import cProfile
+
 from kinfer_sim.provider import (
     CombinedInputState,
     ControlVectorInputState,
@@ -167,6 +169,11 @@ class SimulationServer:
         num_steps = 0
         fps_update_interval = 1.0  # Update FPS every second
 
+        # Run the simulator for a single step to initialize it before we instantiate the model provider.
+        # This is because the model provider is going to read the initial IMU orientation quaternion orientation during construction,
+        # and the model might change position drastically during the first simulation step
+        self.simulator.step()
+
         # Initialize the model runner on the simulator.
         model_provider = ModelProvider(
             self.simulator,
@@ -189,10 +196,15 @@ class SimulationServer:
             while not self._stop_event.is_set():
                 model_provider.arrays.clear()
 
+                sim_start = time.perf_counter()
+
                 # Runs the simulation for one step.
                 async with self._step_lock:
                     for _ in range(self.simulator._sim_decimation):
-                        await self.simulator.step()
+                        # cProfile.runctx("self.simulator.step()", {}, {"self": self})
+                        self.simulator.step()
+
+                sim_end = time.perf_counter()
 
                 # Shut down if the viewer is closed.
                 if isinstance(self.simulator._viewer, QtViewer):
@@ -200,8 +212,14 @@ class SimulationServer:
                         break
 
                 # Offload blocking calls to the executor
+                model_start = time.perf_counter()
+
+                self.simulator.push_sensor_data()
+
                 output, carry = await loop.run_in_executor(None, model_runner.step, carry)
                 await loop.run_in_executor(None, model_runner.take_action, output)
+
+                model_end = time.perf_counter()
 
                 num_steps += 1
                 if logs is not None:
@@ -212,15 +230,32 @@ class SimulationServer:
 
                 # Match the simulation time to the wall clock time.
                 wall_time_for_next_step += ctrl_dt
-                await asyncio.sleep(max(0, wall_time_for_next_step - time.perf_counter()))
+                wait_time = wall_time_for_next_step - time.perf_counter()
+                if wait_time < 0:
+                    logger.warning(
+                        "Simulation is running behind schedule! Expected to wait %.3f seconds, but waited %.3f seconds",
+                        ctrl_dt,
+                        -wait_time,
+                    )
+                    if self.simulator._sim_decimation > 10:
+                        logger.warning(
+                            "Consider increasing the the simulation timestep (--dt) to be closer to the model control dt."
+                        )
+                        logger.warning("Simulation timestep: %.6f, Model control dt: %.6f", self.simulator._dt, ctrl_dt)
+                    # Reset to avoid spamming all the time
+                    wall_time_for_next_step = time.perf_counter() + ctrl_dt
+
+                await asyncio.sleep(max(0, wait_time))
 
                 # Calculate and log FPS
                 current_time = time.perf_counter()
                 if current_time - last_fps_time >= fps_update_interval:
-                    physics_fps = num_steps / (current_time - last_fps_time)
+                    physics_fps = (self.simulator._sim_decimation * num_steps) / (sim_end - sim_start)
+                    model_fps = num_steps / (model_end - model_start)
                     logger.info(
-                        "Physics FPS: %.2f, Simulation time: %.3f, Wall time: %.3f",
+                        "Physics FPS: %.2f, Model FPS: %.2f, Simulation time: %.3f, Wall time: %.3f",
                         physics_fps,
+                        model_fps,
                         self.simulator.sim_time,
                         current_time,
                     )

@@ -303,7 +303,9 @@ class ModelProvider(ModelProviderABC):
             elif input_type == "joint_angular_velocities":
                 inputs[input_type] = self.get_joint_angular_velocities(metadata.joint_names)  # type: ignore[attr-defined]
             elif input_type == "initial_heading":
-                inputs[input_type] = np.array([self.initial_heading])
+                logger.info(f"Initial heading: {self.initial_heading}")
+                # inputs[input_type] = np.array([self.initial_heading])
+                inputs[input_type] = np.array([0.0])
             elif input_type == "quaternion":
                 inputs[input_type] = self.get_quaternion()
             elif input_type == "projected_gravity":
@@ -343,6 +345,7 @@ class ModelProvider(ModelProviderABC):
         sensor = self.simulator._data.sensor(quat_name)
         quat = sensor.data
         # quat = np.array([quat[3], quat[0], quat[1], quat[2]], dtype=np.float32)
+        logger.info(f"Quaternion: {quat[0]}, {quat[1]}, {quat[2]}, {quat[3]}")
         self.arrays["quaternion"] = quat
         return quat
 
@@ -383,7 +386,7 @@ class ModelProvider(ModelProviderABC):
     def get_command(self) -> np.ndarray:
         command_array = np.array(self.keyboard_state.value, dtype=np.float32)
         self.arrays["command"] = command_array
-        # logger.info(f"Command: {command_array}")
+        logger.info(f"Command: {command_array}")
         return command_array
 
     def take_action(self, action: np.ndarray, metadata: PyModelMetadata) -> None:
