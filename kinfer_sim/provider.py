@@ -374,7 +374,7 @@ class ModelProvider(ModelProviderABC):
     def get_command(self) -> np.ndarray:
         command_array = np.array(self.keyboard_state.value, dtype=np.float32)
         self.arrays["command"] = command_array
-        # logger.info(f"Command: {command_array}")
+        logger.info(f"Command: {command_array}")
         return command_array
 
     def take_action(self, action: np.ndarray, metadata: PyModelMetadata) -> None:
